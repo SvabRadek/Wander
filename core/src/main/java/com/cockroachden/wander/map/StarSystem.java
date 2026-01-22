@@ -15,6 +15,8 @@ public class StarSystem {
     public float rareMineralRichness;
     public float nobleGasRichness;
 
+    public java.util.List<Planet> planets = new java.util.ArrayList<>();
+
     public boolean hasLuxuryResources;
 
     public StarSystem(String name, Color color) {
