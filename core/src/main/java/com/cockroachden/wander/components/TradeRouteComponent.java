@@ -11,4 +11,5 @@ public class TradeRouteComponent implements Component {
     public List<Vector2> path; // World coordinates (sector coords * size?) or just grid coords?
                                // Better use world coordinates for rendering directly.
     public float value;
+    public float flow;
 }

@@ -213,11 +213,26 @@ public class GameScreen extends ScreenAdapter {
         Gdx.gl.glLineWidth(1f);
         shapeRenderer.setColor(Color.DARK_GRAY);
 
-        // Pass 1: Borders
+        // Pass 1a: Normal Borders (Dark Gray)
+        shapeRenderer.setColor(Color.DARK_GRAY);
         for (Entity region : regions) {
             if (region == hoveredRegionEntity || region == selectedRegionEntity)
                 continue;
-            renderRegionBorders(region);
+
+            if (!isProhibitedForPlayer(region)) {
+                renderRegionBorders(region);
+            }
+        }
+
+        // Pass 1b: Prohibited Borders (Red) - Drawn on top
+        shapeRenderer.setColor(Color.RED);
+        for (Entity region : regions) {
+            if (region == hoveredRegionEntity || region == selectedRegionEntity)
+                continue;
+
+            if (isProhibitedForPlayer(region)) {
+                renderRegionBorders(region);
+            }
         }
         shapeRenderer.end();
 
@@ -225,7 +240,11 @@ public class GameScreen extends ScreenAdapter {
         if (hoveredRegionEntity != null && hoveredRegionEntity != selectedRegionEntity) {
             Gdx.gl.glLineWidth(2f);
             shapeRenderer.begin(ShapeRenderer.ShapeType.Line);
-            shapeRenderer.setColor(Color.CYAN);
+            if (isProhibitedForPlayer(hoveredRegionEntity)) {
+                shapeRenderer.setColor(Color.RED);
+            } else {
+                shapeRenderer.setColor(Color.CYAN);
+            }
             renderRegionBorders(hoveredRegionEntity);
             shapeRenderer.end();
         }
@@ -282,6 +301,20 @@ public class GameScreen extends ScreenAdapter {
                 shapeRenderer.triangle(x1, y1, x3, y3, x4, y4);
             }
         }
+    }
+
+    private boolean isProhibitedForPlayer(Entity region) {
+        Entity player = getPlayerEmpire();
+        if (player != null && prohibitedMapper.has(region)) {
+            return prohibitedMapper.get(region).blockedByEmpires.contains(player);
+        }
+        return false;
+    }
+
+    private Entity getPlayerEmpire() {
+        ImmutableArray<Entity> players = galaxy.getEngine()
+                .getEntitiesFor(Family.all(PlayerComponent.class, EmpireComponent.class).get());
+        return (players.size() > 0) ? players.first() : null;
     }
 
     private void renderRegionBorders(Entity region) {
@@ -528,7 +561,8 @@ public class GameScreen extends ScreenAdapter {
 
                 String info = p.name + "\n" + "Type: " + p.type + "\n";
                 if (p.population > 0) {
-                    info += String.format("Pop: %.2f B\n", p.population / 1_000_000_000f);
+                    info += String.format("Pop: %.2f B (+%.2f M)\n", p.population / 1_000_000_000f,
+                            p.deltaPopulation / 1_000_000f);
                     if (systemOwnedByPlayer && playerComp != null) {
                         float taxIncome = (p.population / 1_000_000f) * playerComp.taxRate;
                         info += String.format("Tax: %.1f%% (+%.0f)\n", playerComp.taxRate * 100f, taxIncome);
@@ -536,8 +570,9 @@ public class GameScreen extends ScreenAdapter {
                 } else {
                     info += "Uninhabited\n";
                 }
-                info += String.format("Q:%.0f%% M:%.1f R:%.1f G:%.1f", p.quality * 100f, p.metalRichness,
-                        p.rareMineralRichness, p.nobleGasRichness);
+                info += String.format("Q:%.0f%% M:%.1f R:%.1f G:%.1f\nTrade Cap: %.1f", p.quality * 100f,
+                        p.metalRichness,
+                        p.rareMineralRichness, p.nobleGasRichness, p.tradeCapacity);
 
                 Label pLabel = new Label(info, skin);
                 planetTable.add(pLabel).left().expandX();
@@ -630,7 +665,36 @@ public class GameScreen extends ScreenAdapter {
                     sb.append("\n");
                     sb.append(String.format("Stars:     %d\n", resComp.systemCount));
                     sb.append(String.format("Planets:   %d\n", resComp.planetCount));
-                    sb.append(String.format("Habitable: %d", resComp.habitableCount));
+                    sb.append(String.format("Habitable: %d\n", resComp.habitableCount));
+
+                    // Calc Flow
+                    float totalFlow = 0f;
+                    ImmutableArray<Entity> routes = galaxy.getEngine()
+                            .getEntitiesFor(Family.all(TradeRouteComponent.class).get());
+                    for (Entity route : routes) {
+                        TradeRouteComponent tr = tradeRouteMapper.get(route);
+
+                        boolean passesThrough = false;
+                        // Check if source or target belongs to this region
+                        if (isNodeInRegion(tr.source, region) || isNodeInRegion(tr.target, region)) {
+                            passesThrough = true;
+                        } else if (tr.path != null) {
+                            // Check if path goes through this region
+                            for (com.badlogic.gdx.math.Vector2 point : tr.path) {
+                                Entity sector = galaxy.getSectorEntity((int) point.x, (int) point.y);
+                                if (sector != null && isNodeInRegion(sector, region)) {
+                                    passesThrough = true;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (passesThrough) {
+                            totalFlow += tr.flow;
+                        }
+                    }
+                    sb.append(String.format("Trade Flow: %.1f", totalFlow));
+
                     stats = sb.toString();
                 }
             }
@@ -639,6 +703,7 @@ public class GameScreen extends ScreenAdapter {
 
             // Prohibited Access Toggle (Only for Player)
             Entity playerEmpire = getPlayerEmpire();
+
             if (playerEmpire != null && typeComp != null && (typeComp.type == RegionTypeComponent.RegionType.NEBULA
                     || typeComp.type == RegionTypeComponent.RegionType.VOID)) {
 
@@ -718,6 +783,11 @@ public class GameScreen extends ScreenAdapter {
             float centerY = (minY + maxY) / 2f * SECTOR_SIZE;
 
             camera.position.set(centerX, centerY, 0);
+        }
+
+        private boolean isNodeInRegion(Entity starSystem, Entity region) {
+            ParentRegionComponent prc = parentRegionMapper.get(starSystem);
+            return prc != null && prc.regionEntity == region;
         }
     }
 

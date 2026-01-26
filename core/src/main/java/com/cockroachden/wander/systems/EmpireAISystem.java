@@ -24,11 +24,11 @@ public class EmpireAISystem extends EntitySystem {
     public void update(float deltaTime) {
         ImmutableArray<Entity> empires = getEngine().getEntitiesFor(Family.all(EmpireComponent.class).get());
 
-        // 1. Always update delta (projected income) for UI
-        for (Entity empire : empires) {
-            EmpireComponent empireComp = empire.getComponent(EmpireComponent.class);
-            calculateProjectedIncome(empireComp);
-        }
+        // 1. Remove Delta Calculation as it is now done in EconomySystem
+        // However, EconomySystem runs every 5 seconds. GameScreen UI might want
+        // immediate feedback or just last known delta.
+        // Since deltas are only updated every 5s in EconomySystem, let's leave them be.
+        // We can remove this block entirely.
 
         // 2. Check Timer for actual transaction
         timer += deltaTime;
@@ -38,56 +38,10 @@ public class EmpireAISystem extends EntitySystem {
             for (Entity empire : empires) {
                 EmpireComponent empireComp = empire.getComponent(EmpireComponent.class);
 
-                // Income
-                applyIncome(empireComp);
-
                 // Expansion
                 attemptExpansion(empire, empireComp);
             }
         }
-    }
-
-    private void calculateProjectedIncome(EmpireComponent empire) {
-        float income = 0;
-        float metals = 0;
-        float rares = 0;
-        float gas = 0;
-        float luxury = 0;
-
-        for (Entity system : empire.ownedSystems) {
-            StarSystemComponent star = system.getComponent(StarSystemComponent.class);
-            if (star != null) {
-                // Population Income: (Pop / 1M) * TaxRate
-                long systemPop = 0;
-                for (com.cockroachden.wander.map.Planet p : star.planets) {
-                    systemPop += p.population;
-                }
-                income += (systemPop / 1_000_000f) * empire.taxRate;
-
-                // Resource Income
-                metals += star.metalRichness * 10;
-                rares += star.rareMineralRichness * 5;
-                gas += star.nobleGasRichness * 5;
-                if (star.hasLuxuryResources)
-                    luxury += 1;
-            }
-        }
-
-        // Update Deltas BUT NOT ACTUALS
-        empire.deltaCredits = income;
-        empire.deltaMetals = metals;
-        empire.deltaRareMinerals = rares;
-        empire.deltaNobleGases = gas;
-        empire.deltaLuxuryResources = luxury;
-    }
-
-    private void applyIncome(EmpireComponent empire) {
-        // Reuse delta values since they are freshly calculated this frame
-        empire.credits += empire.deltaCredits;
-        empire.metals += empire.deltaMetals;
-        empire.rareMinerals += empire.deltaRareMinerals;
-        empire.nobleGases += empire.deltaNobleGases;
-        empire.luxuryResources += empire.deltaLuxuryResources;
     }
 
     private void attemptExpansion(Entity empireEnt, EmpireComponent empire) {

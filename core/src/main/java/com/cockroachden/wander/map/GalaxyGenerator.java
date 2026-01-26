@@ -203,6 +203,10 @@ public class GalaxyGenerator {
                     }
 
                     system.planets.add(planet);
+
+                    // Initial Trade Capacity Estimate (Refined by EconomySystem later)
+                    planet.tradeCapacity = (planet.population * 0.000001f) + (planet.industryLevel * 5.0f)
+                            + ((planet.metalRichness + planet.rareMineralRichness + planet.nobleGasRichness) * 10.0f);
                 }
 
                 sector.setStarSystem(system);

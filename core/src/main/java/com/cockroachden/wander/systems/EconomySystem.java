@@ -12,9 +12,12 @@ import java.util.*;
 
 public class EconomySystem extends IntervalSystem {
     private final Galaxy galaxy;
+    private final float FLOW_POPULATION_FACTOR = 0.000001f;
+    private final float FLOW_INDUSTRY_FACTOR = 5.0f;
+    private final float FLOW_RESOURCE_FACTOR = 10.0f;
 
     public EconomySystem(Galaxy galaxy) {
-        super(2.0f); // Run every 2 seconds
+        super(5.0f); // Run every 5 seconds (Game Tick)
         this.galaxy = galaxy;
     }
 
@@ -23,7 +26,10 @@ public class EconomySystem extends IntervalSystem {
         ImmutableArray<Entity> empires = getEngine().getEntitiesFor(Family.all(EmpireComponent.class).get());
 
         for (Entity empire : empires) {
+            updatePopulation(empire);
+            recalculateRouteFlows(empire);
             validateRoutes(empire);
+            updateResources(empire);
             updateTradeRoutes(empire);
         }
     }
@@ -50,6 +56,20 @@ public class EconomySystem extends IntervalSystem {
                 if (path != null && !path.isEmpty()) {
                     createTradeRoute(s1, s2, path);
                 }
+            }
+        }
+    }
+
+    private void recalculateRouteFlows(Entity empire) {
+        ImmutableArray<Entity> routes = getEngine().getEntitiesFor(Family.all(TradeRouteComponent.class).get());
+        for (Entity route : routes) {
+            TradeRouteComponent tr = route.getComponent(TradeRouteComponent.class);
+            OwnerComponent own = tr.source.getComponent(OwnerComponent.class);
+            if (own != null && own.owner == empire) {
+                float capacity1 = calculateSystemTradeCapacity(tr.source);
+                float capacity2 = calculateSystemTradeCapacity(tr.target);
+                tr.flow = Math.min(capacity1, capacity2);
+                tr.value = tr.flow;
             }
         }
     }
@@ -103,6 +123,77 @@ public class EconomySystem extends IntervalSystem {
         return false;
     }
 
+    private void updatePopulation(Entity empire) {
+        EmpireComponent empireComp = empire.getComponent(EmpireComponent.class);
+        List<Entity> owned = empireComp.ownedSystems;
+
+        for (Entity system : owned) {
+            StarSystemComponent star = system.getComponent(StarSystemComponent.class);
+            if (star != null) {
+                for (com.cockroachden.wander.map.Planet p : star.planets) {
+                    if (p.population > 0) {
+                        float growthRate = (p.quality * 0.01f) + (p.industryLevel * 0.005f);
+                        // Cap growth rate or add diminishing returns if needed
+                        long growth = (long) (p.population * growthRate);
+                        // Also add some base growth or cap?
+                        // Simplified Model:
+                        p.deltaPopulation = growth;
+                        p.population += p.deltaPopulation;
+                    }
+                }
+            }
+        }
+    }
+
+    private void updateResources(Entity empire) {
+        EmpireComponent empireComp = empire.getComponent(EmpireComponent.class);
+
+        float income = 0;
+        float metals = 0;
+        float rares = 0;
+        float gas = 0;
+        float luxury = 0;
+
+        for (Entity system : empireComp.ownedSystems) {
+            StarSystemComponent star = system.getComponent(StarSystemComponent.class);
+            if (star != null) {
+                // Population Income: (Pop / 1M) * TaxRate * 5 (Tick Multiplier since we run
+                // every 5s instead of assumed 1s? Or just relative)
+                // Let's keep logic relative to tick.
+                long systemPop = 0;
+                for (com.cockroachden.wander.map.Planet p : star.planets) {
+                    systemPop += p.population;
+                }
+                income += (systemPop / 1_000_000f) * empireComp.taxRate;
+
+                // Resource Income
+                metals += star.metalRichness * 10;
+                rares += star.rareMineralRichness * 5;
+                gas += star.nobleGasRichness * 5;
+                if (star.hasLuxuryResources)
+                    luxury += 1;
+            }
+        }
+
+        // Apply Trade Income? (Optional, if flows generate credits directly)
+        // For now, let's say flows increase industry/growth, not direct credits unless
+        // taxed.
+
+        // Update Deltas
+        empireComp.deltaCredits = income;
+        empireComp.deltaMetals = metals;
+        empireComp.deltaRareMinerals = rares;
+        empireComp.deltaNobleGases = gas;
+        empireComp.deltaLuxuryResources = luxury;
+
+        // Apply
+        empireComp.credits += empireComp.deltaCredits;
+        empireComp.metals += empireComp.deltaMetals;
+        empireComp.rareMinerals += empireComp.deltaRareMinerals;
+        empireComp.nobleGases += empireComp.deltaNobleGases;
+        empireComp.luxuryResources += empireComp.deltaLuxuryResources;
+    }
+
     private boolean routeExists(Entity s1, Entity s2) {
         ImmutableArray<Entity> routes = getEngine().getEntitiesFor(Family.all(TradeRouteComponent.class).get());
         for (Entity route : routes) {
@@ -120,9 +211,32 @@ public class EconomySystem extends IntervalSystem {
         tr.source = s1;
         tr.target = s2;
         tr.path = path;
-        tr.value = 10f; // TODO: Calc value based on system richness
+
+        // Calculate Flow
+        float capacity1 = calculateSystemTradeCapacity(s1);
+        float capacity2 = calculateSystemTradeCapacity(s2);
+        tr.flow = Math.min(capacity1, capacity2);
+        tr.value = tr.flow; // Set value to flow for now or keep separate if needed
+
         route.add(tr);
         getEngine().addEntity(route);
+    }
+
+    private float calculateSystemTradeCapacity(Entity systemEntity) {
+        StarSystemComponent sysInfo = systemEntity.getComponent(StarSystemComponent.class);
+        if (sysInfo == null)
+            return 0f;
+
+        float capacity = 0f;
+        for (com.cockroachden.wander.map.Planet p : sysInfo.planets) {
+            float planetVal = (p.population * FLOW_POPULATION_FACTOR)
+                    + (p.industryLevel * FLOW_INDUSTRY_FACTOR)
+                    + ((p.metalRichness + p.rareMineralRichness + p.nobleGasRichness) * FLOW_RESOURCE_FACTOR);
+
+            p.tradeCapacity = planetVal; // Store for UI
+            capacity += planetVal;
+        }
+        return capacity;
     }
 
     // A* Pathfinding
@@ -158,6 +272,30 @@ public class EconomySystem extends IntervalSystem {
 
                 if (isProhibited(neighbor, empire)) {
                     continue;
+                }
+
+                // Check for obstacle (Star System)
+                // If the sector contains a star system and it is NOT start or end, blocks path.
+                StarSystemComponent starSys = neighbor.getComponent(StarSystemComponent.class);
+                // We need to check if this neighbor sector is where the start or end entity
+                // resides.
+                // start and end are entities (the systems themselves).
+                // Let's assume the entity passed to findPath IS the sector entity or has same
+                // components.
+                // Actually start/end in findPath are the system entities which likely have
+                // GridPositionComponent.
+                // We should check if neighbor == start || neighbor == end
+                // But 'neighbor' here is the sector entity grid[x][y].
+                // 'start' and 'end' might be the same entity reference if they are the
+                // underlying sectors?
+                // Or maybe they are separate entities sitting on top?
+                // EconomySystem:41 `Entity s1 = owned.get(i);` -> s1 is likely the Star System
+                // entity.
+                // And Galaxy registers sectors.
+                // Let's assume s1/s2 ARE the sector entities or mapped 1:1.
+                boolean isStartOrEnd = (neighbor == start || neighbor == end);
+                if (starSys != null && !isStartOrEnd) {
+                    continue; // Block trade route through other star systems
                 }
 
                 // Cost calculation
